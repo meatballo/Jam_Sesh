@@ -1,5 +1,11 @@
 # Jam_Sesh
 
+# Setup Guide
+first install portaudio. On mac run 
+`brew install portaudio`
+on linux run
+`sudo apt-get install portaudio19-dev`
+
 # Brief Guide to Git
 
 after making changes
