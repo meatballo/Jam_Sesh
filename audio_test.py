@@ -1,77 +1,95 @@
 import os
 import math
-import random
 import time
+import json
+import threading
 from pydub import AudioSegment
 import simpleaudio as sa
-from SoundPlayer import SoundPlayer
 
-# Create sample list
+# 设置样本文件夹
 SAMPLE_FOLDER = "samples"
 samples = {}
 
-# Locate the sample and check the files
+# 读取samples
 for file in sorted(os.listdir(SAMPLE_FOLDER)):
     if file.endswith(".mp3"):
         key = int(file.split("_")[0])
-        samples[key] = os.path.join(SAMPLE_FOLDER, file)
+        samples[str(key)] = os.path.join(SAMPLE_FOLDER, file)
 
-# Print the samples to verify
-print("Samples found:", samples)
-
-# Change pitch
+# 音高变换
 def change_pitch(file_path, pitch_shift):
     sound = AudioSegment.from_file(file_path)
-    new_frame_rate = int(sound.frame_rate * (2 ** (pitch_shift / 12)))  # Pitch shift in semitones
+    new_frame_rate = int(sound.frame_rate * (2 ** (pitch_shift / 12)))
     return sound._spawn(sound.raw_data, overrides={"frame_rate": new_frame_rate}).set_frame_rate(44100)
 
-# Play sound
+# 播放音频（开新线程，允许重叠）
 def play_sound(sound):
-    playback = sa.play_buffer(sound.raw_data, num_channels=sound.channels, bytes_per_sample=sound.sample_width, sample_rate=sound.frame_rate)
-    # playback.wait_done()
+    threading.Thread(target=lambda: sa.play_buffer(
+        sound.raw_data,
+        num_channels=sound.channels,
+        bytes_per_sample=sound.sample_width,
+        sample_rate=sound.frame_rate
+    ).wait_done()).start()
 
+# 根据g值计算频率倍率
 def get_pitch_times(g, base_freq=261.63):
-    g_to_semitone = {
-        1: 0,   # C
-        2: 2,   # D
-        3: 4,   # E
-        4: 5,   # F
-        5: 7,   # G
-        6: 9,   # A
-        7: 11   # B
-    }
-
+    g_to_semitone = {1: 0, 2: 2, 3: 4, 4: 5, 5: 7, 6: 9, 7: 11}
     if g not in g_to_semitone:
         raise ValueError("G must be between 1 and 7.")
+    return math.pow(2, g_to_semitone[g] / 12)
 
-    n = g_to_semitone[g]
-    pitch_times = math.pow(2, n / 12)
-    return pitch_times
+# 输入文件路径
+INPUT_FILE = "realtime_input.txt"
 
-def main():
-    # Ensure a sample exists for key 1
+# 监听输入
+def monitor_input():
+    last_processed_line = ""
+    while True:
+        try:
+            with open(INPUT_FILE, "r") as f:
+                lines = f.readlines()
+                if not lines:
+                    time.sleep(0.05)
+                    continue
 
-    # soundPlayers = []
-    # for i, sample in enumerate(samples):
-    #     soundPlayers[i] = SoundPlayer(samples)
-    
-    if 2 in samples:
-        selected_sample = samples[2]  
-        print(f"Playing: {selected_sample}")
-        for i in range(20):
-            start_time = time.time()
-            pitch_index = math.floor(random.randint(1, 7))
-            pitch_times = get_pitch_times(pitch_index)
-            pitch_shift = math.log2(pitch_times) * 12
-            modified_sound = change_pitch(selected_sample, math.log2(pitch_times) * 12)  
-            play_sound(modified_sound)
+                # 只处理最后一行
+                line = lines[-1].strip()
+                if line == last_processed_line or not line:
+                    time.sleep(0.05)
+                    continue
+                last_processed_line = line
 
-            sleep_time = random.uniform(0, 3)
-            time.sleep(sleep_time)
-            end_time = time.time()
-            print(end_time - start_time)
-    else:
-        print("Sample 3 not found in the samples folder.")
+                try:
+                    # 去掉空格，转小写，解析json
+                    clean_line = line.strip().lower()
+                    data = json.loads(clean_line)
+                    
+                    if not isinstance(data, list) or len(data) != 3:
+                        print(f"Invalid data format: {line}")
+                        continue
+                    
+                    is_active, sample_key, g = data
+
+                    if is_active and str(sample_key) in samples:
+                        pitch_shift = math.log2(get_pitch_times(int(g))) * 12
+                        sound = change_pitch(samples[str(sample_key)], pitch_shift)
+                        play_sound(sound)
+
+                except json.JSONDecodeError as e:
+                    print("JSON decode error:", e)
+                    print("Problematic line:", repr(line))
+                    time.sleep(0.1)
+                except Exception as e:
+                    print("Error processing line:", e)
+                    time.sleep(0.1)
+
+            time.sleep(0.01)
+        except FileNotFoundError:
+            print(f"Input file '{INPUT_FILE}' not found. Waiting...")
+            time.sleep(1)
+        except Exception as e:
+            print("File read error:", e)
+            time.sleep(0.5)
 
 if __name__ == "__main__":
-    main()
+    monitor_input()
